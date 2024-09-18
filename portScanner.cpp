@@ -76,6 +76,7 @@ int main(int argc, char* argv[]) {
             if (recv_len >= 0) {
                 std::cerr << "port " << port << " is listening! response on attempt: " << attempt + 1 << std::endl;
                 is_listening = true;
+                openPorts.push_back(port);
                 break;
             } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 // No response received within the timeout
@@ -91,6 +92,12 @@ int main(int argc, char* argv[]) {
 
         close(sock);
     }
+
+    std::cerr << "OPEN PORTS: " << std::endl;
+    for (int value : openPorts) {
+        std::cout << value << " ";
+    }
+
 
     return 0;
 }
