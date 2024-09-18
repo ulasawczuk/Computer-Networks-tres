@@ -15,16 +15,8 @@
 #define TIMEOUT_USEC 500000  // 0.5 seconds in microseconds
 #define RETRY_COUNT 5
 
-int main(int argc, char* argv[]) {
-    if (argc != 4) {
-        std::cerr << "Usage: " << argv[0] << " <target-ip> <start-port> <end-port>" << std::endl;
-        return 1;
-    }
-
-    const char* target_ip = argv[1];
-    int start_port = std::atoi(argv[2]);
-    int end_port = std::atoi(argv[3]);
-
+// Function to scan ports within a range and return the list of open ports
+std::list<int> scan_ports(const char* target_ip, int start_port, int end_port) {
     std::list<int> openPorts;
 
     for (int port = start_port; port <= end_port; ++port) {
@@ -33,8 +25,8 @@ int main(int argc, char* argv[]) {
         // Create a UDP socket using SOCK_DGRAM
         int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (sock < 0) {
-            std::cerr << "socket creation failed:" << strerror(errno) << std::endl;
-            return 1;
+            std::cerr << "socket creation failed: " << strerror(errno) << std::endl;
+            return openPorts;  // Return the list of open ports found so far
         }
 
         // Set a receive timeout of 0.5 seconds
@@ -42,7 +34,7 @@ int main(int argc, char* argv[]) {
         timeout.tv_sec = TIMEOUT_SEC;
         timeout.tv_usec = TIMEOUT_USEC;
         if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
-            std::cerr << "failed to set socket timeout:" << strerror(errno) << std::endl;
+            std::cerr << "failed to set socket timeout: " << strerror(errno) << std::endl;
             close(sock);
             continue;
         }
@@ -60,10 +52,10 @@ int main(int argc, char* argv[]) {
 
         for (int attempt = 0; attempt < RETRY_COUNT; ++attempt) {
             std::cerr << "sending packet to port " << port << ", attempt " << attempt + 1 << std::endl;
-            
+
             const char* message = "Hello";
             if (sendto(sock, message, strlen(message), 0, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-                std::cerr << "failed to send packet to port " << port << ":" << strerror(errno) << std::endl;
+                std::cerr << "failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
                 break;
             }
 
@@ -76,7 +68,7 @@ int main(int argc, char* argv[]) {
             if (recv_len >= 0) {
                 std::cerr << "port " << port << " is listening! response on attempt: " << attempt + 1 << std::endl;
                 is_listening = true;
-                openPorts.push_back(port);
+                openPorts.push_back(port);  // Add open port to the list
                 break;
             } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 // No response received within the timeout
@@ -93,11 +85,26 @@ int main(int argc, char* argv[]) {
         close(sock);
     }
 
-    std::cerr << "OPEN PORTS: " << std::endl;
-    for (int value : openPorts) {
-        std::cout << value << " ";
+    return openPorts;  // Return the list of open ports
+}
+
+int main(int argc, char* argv[]) {
+    if (argc != 4) {
+        std::cerr << "Usage: " << argv[0] << " <target-ip> <start-port> <end-port>" << std::endl;
+        return 1;
     }
 
+    const char* target_ip = argv[1];
+    int start_port = std::atoi(argv[2]);
+    int end_port = std::atoi(argv[3]);
+
+    std::list<int> open_ports = scan_ports(target_ip, start_port, end_port);
+
+    std::cerr << "OPEN PORTS: " << std::endl;
+    for (int port : open_ports) {
+        std::cout << port << " ";
+    }
+    std::cout << std::endl;
 
     return 0;
 }
