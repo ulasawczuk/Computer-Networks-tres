@@ -8,11 +8,12 @@
 #include <unistd.h>
 #include <chrono>
 #include <thread>
+#include <list>
 
 #define BUFFER_SIZE 512
-#define TIMEOUT_SEC 2
+#define TIMEOUT_SEC 0
+#define TIMEOUT_USEC 500000  // 0.5 seconds in microseconds
 #define RETRY_COUNT 5
-
 
 int main(int argc, char* argv[]) {
     if (argc != 4) {
@@ -24,6 +25,8 @@ int main(int argc, char* argv[]) {
     int start_port = std::atoi(argv[2]);
     int end_port = std::atoi(argv[3]);
 
+    std::list<int> openPorts;
+
     for (int port = start_port; port <= end_port; ++port) {
         bool is_listening = false;
 
@@ -34,10 +37,10 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // Set a receive timeout
+        // Set a receive timeout of 0.5 seconds
         struct timeval timeout;
         timeout.tv_sec = TIMEOUT_SEC;
-        timeout.tv_usec = 0;
+        timeout.tv_usec = TIMEOUT_USEC;
         if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
             std::cerr << "failed to set socket timeout:" << strerror(errno) << std::endl;
             close(sock);
@@ -60,7 +63,7 @@ int main(int argc, char* argv[]) {
             
             const char* message = "Hello";
             if (sendto(sock, message, strlen(message), 0, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-                std::cerr << "failed to send packet to port " << port << ":" << std::endl;
+                std::cerr << "failed to send packet to port " << port << ":" << strerror(errno) << std::endl;
                 break;
             }
 
@@ -71,11 +74,11 @@ int main(int argc, char* argv[]) {
             int recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, NULL, NULL);
 
             if (recv_len >= 0) {
-                std::cerr << "port " << port << "is listening! response on attempt: " << attempt + 1 << std::endl;
+                std::cerr << "port " << port << " is listening! response on attempt: " << attempt + 1 << std::endl;
                 is_listening = true;
                 break;
             } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // log_info("No response from port " + std::to_string(port) + " on attempt " + std::to_string(attempt + 1));
+                // No response received within the timeout
             } else {
                 std::cerr << "error on port " << port << ": " << strerror(errno) << std::endl;
                 break;
@@ -83,7 +86,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (!is_listening) {
-            std::cerr << "port " << port << " is closed " << std::endl;
+            std::cerr << "port " << port << " is closed" << std::endl;
         }
 
         close(sock);
