@@ -177,18 +177,18 @@ void sendUDPport(int sock, sockaddr_in server_addr, int port){
         std::cerr << "response: " << buffer << std::endl;
     }
 
-    uint32_t last_four_bytes;
-    uint16_t last_two_bytes;
+    uint16_t two_bytes_checksum;
+    uint32_t four_bytes_ip;
 
-    memcpy(&last_four_bytes, buffer + recv_len - 6, 4);
-    last_four_bytes = ntohl(last_four_bytes);  // Convert to network byte order (big-endian)
+    memcpy(&two_bytes_checksum, buffer + recv_len - 6, 2);
+    two_bytes_checksum = ntohs(two_bytes_checksum);  // Convert to network byte order (big-endian)
 
     // Copy the last 2 bytes (network-to-host order conversion)
-    memcpy(&last_two_bytes, buffer + recv_len - 2, 2);
-    last_two_bytes = ntohs(last_two_bytes);  
+    memcpy(&four_bytes_ip, buffer + recv_len - 4, 4);
+    four_bytes_ip = ntohl(four_bytes_ip);  
 
-    std::cerr << "Last 4 bytes in network byte order: " << std::hex << last_four_bytes << std::endl;
-    std::cerr << "Last 2 bytes in network byte order: " << std::hex << last_two_bytes << std::endl;
+    std::cerr << "two bytes of checksum: " << std::hex << two_bytes_checksum << std::endl;
+    std::cerr << "four bytes of ip: " << std::hex << four_bytes_ip << std::endl;
 
 
 }
