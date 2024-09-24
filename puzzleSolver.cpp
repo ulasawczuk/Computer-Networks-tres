@@ -174,7 +174,7 @@ void sendUDPport(int sock, sockaddr_in server_addr, int port){
     if (recv_len >= 0) {
 
         buffer[recv_len] = '\0';  
-        //std::cerr << "response: " << buffer << std::endl;
+        std::cerr << "response: " << buffer << std::endl;
     }
 
     uint32_t last_four_bytes;
@@ -289,7 +289,7 @@ int main(int argc, char* argv[]) {
             int recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, NULL, NULL);
             if (recv_len >= 0) {
                 buffer[recv_len] = '\0';
-                std::cerr << "[1m" << "puzzle:  "  << "[0m" << buffer << std::endl;
+                std::cerr << "puzzle:  "  << buffer << std::endl;
                 std::string buffer_str(buffer);
 
                 // challenge message
