@@ -13,7 +13,6 @@
 #define BUFFER_SIZE 1024
 #define RETRY_COUNT 3
 #define GROUP_ID 64
-#define SECRET_PORT 4065
 
 // IP header from slides
 struct ip {
@@ -63,7 +62,7 @@ uint32_t getSignature(){
 
     signed_challenge = htonl(signed_challenge);
 
-    std::cout << "Signed challenge: 0x" << std::hex << signed_challenge << std::endl;
+    std::cout << "Signature: " << std::hex << signed_challenge << std::endl;
 
     return signed_challenge;
 }
@@ -131,7 +130,7 @@ void secretPort(int sock, sockaddr_in server_addr, int port) {
 
 }
 
-
+// TODO we need a raw socket!!!!
 // sending a signature to the port with message:
 // "Send me a 4-byte message containing the signature you got from S.E.C.R.E.T in the first 4 bytes (in network byte order)."
 void sendSignatureEvil(int sock, sockaddr_in server_addr, int port){
@@ -158,6 +157,7 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port){
     }
 }
 
+// method for the checksum port
 void sendUDPport(int sock, sockaddr_in server_addr, int port){
     uint32_t message = getSignature();
     
@@ -177,19 +177,18 @@ void sendUDPport(int sock, sockaddr_in server_addr, int port){
         std::cerr << "response: " << buffer << std::endl;
     }
 
+    // get last 6 bytes, 2 first bytes of last 6 - checksum, 4 bytes - ip
     uint16_t two_bytes_checksum;
     uint32_t four_bytes_ip;
 
     memcpy(&two_bytes_checksum, buffer + recv_len - 6, 2);
-    two_bytes_checksum = ntohs(two_bytes_checksum);  // Convert to network byte order (big-endian)
+    uint16_t two_bytes = ntohs(two_bytes_checksum);  // Convert to network byte order (big-endian)
 
-    // Copy the last 2 bytes (network-to-host order conversion)
     memcpy(&four_bytes_ip, buffer + recv_len - 4, 4);
-    four_bytes_ip = ntohl(four_bytes_ip);  
+    uint32_t four_bytes = ntohl(four_bytes_ip);  
 
-    std::cerr << "two bytes of checksum: " << std::hex << two_bytes_checksum << std::endl;
-    std::cerr << "four bytes of ip: " << std::hex << four_bytes_ip << std::endl;
-
+    std::cerr << "two bytes of checksum: " << two_bytes << std::endl;
+    std::cerr << "four bytes of ip: " << four_bytes << std::endl;
 
 }
 
