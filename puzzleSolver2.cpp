@@ -13,6 +13,7 @@
 #define BUFFER_SIZE 1024
 #define RETRY_COUNT 3
 #define GROUP_ID 64
+#define SECRET_PORT 4065
 
 #define TIMEOUT_SEC 0
 #define TIMEOUT_USEC 50000 // 0.5 seconds in microseconds
@@ -68,7 +69,7 @@ uint32_t getSignature()
 
     signed_challenge = htonl(signed_challenge);
 
-    std::cout << "Signature: " << std::hex << signed_challenge << std::endl;
+    std::cout << "Signed challenge: 0x" << std::hex << signed_challenge << std::endl;
 
     return signed_challenge;
 }
@@ -145,7 +146,6 @@ void secretPort(int sock, sockaddr_in server_addr, int port)
     }
 }
 
-// TODO we need a raw socket!!!!
 // sending a signature to the port with message:
 // "Send me a 4-byte message containing the signature you got from S.E.C.R.E.T in the first 4 bytes (in network byte order)."
 void sendSignatureEvil(int sock, sockaddr_in server_addr, int port)
@@ -175,7 +175,6 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port)
     }
 }
 
-// method for the checksum port
 void sendUDPport(int sock, sockaddr_in server_addr, int port)
 {
     uint32_t message = getSignature();
@@ -198,18 +197,18 @@ void sendUDPport(int sock, sockaddr_in server_addr, int port)
         std::cerr << "response: " << buffer << std::endl;
     }
 
-    // get last 6 bytes, 2 first bytes of last 6 - checksum, 4 bytes - ip
-    uint16_t two_bytes_checksum;
-    uint32_t four_bytes_ip;
+    uint32_t last_four_bytes;
+    uint16_t last_two_bytes;
 
-    memcpy(&two_bytes_checksum, buffer + recv_len - 6, 2);
-    uint16_t two_bytes = ntohs(two_bytes_checksum); // Convert to network byte order (big-endian)
+    memcpy(&last_four_bytes, buffer + recv_len - 6, 4);
+    last_four_bytes = ntohl(last_four_bytes); // Convert to network byte order (big-endian)
 
-    memcpy(&four_bytes_ip, buffer + recv_len - 4, 4);
-    uint32_t four_bytes = ntohl(four_bytes_ip);
+    // Copy the last 2 bytes (network-to-host order conversion)
+    memcpy(&last_two_bytes, buffer + recv_len - 2, 2);
+    last_two_bytes = ntohs(last_two_bytes);
 
-    std::cerr << "two bytes of checksum: " << two_bytes << std::endl;
-    std::cerr << "four bytes of ip: " << four_bytes << std::endl;
+    std::cerr << "Last 4 bytes in network byte order: " << std::hex << last_four_bytes << std::endl;
+    std::cerr << "Last 2 bytes in network byte order: " << std::hex << last_two_bytes << std::endl;
 }
 
 // UDP message where:
@@ -272,6 +271,7 @@ int main(int argc, char *argv[])
 
     for (int port : open_ports)
     {
+        std::cerr << "\n\nTrying to open port " << port << std::endl;
 
         int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (sock < 0)
@@ -312,8 +312,6 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            std::cerr << "port: " << port << std::endl;
-
             char buffer[BUFFER_SIZE] = {0};
             sockaddr_in response_addr;
             socklen_t addr_len = sizeof(response_addr);
@@ -321,6 +319,7 @@ int main(int argc, char *argv[])
             int recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, NULL, NULL);
             if (recv_len >= 0)
             {
+                std::cerr << "Successfully opened port: " << port << std::endl;
                 buffer[recv_len] = '\0';
                 std::cerr << "puzzle:  " << buffer << std::endl;
                 std::string buffer_str(buffer);
@@ -328,14 +327,15 @@ int main(int argc, char *argv[])
                 // challenge message
                 if (buffer_str.find("Greetings from S.E.C.R.E.T") != std::string::npos)
                 {
-                    std::cerr << "secret" << std::endl;
+                    std::cerr << "\nThis is the secret challange:\n"
+                              << std::endl;
                     secretPort(sock, server_addr, port);
                 }
 
                 // evil bit
                 if (buffer_str.find("The dark side of network programming") != std::string::npos)
                 {
-                    std::cerr << "evil bit" << std::endl;
+                    std::cerr << "\n The evil bit challange:" << std::endl;
                     sendSignatureEvil(sock, server_addr, port);
                 }
 
@@ -354,6 +354,10 @@ int main(int argc, char *argv[])
                 }
 
                 break;
+            }
+            else
+            {
+                std::cerr << "No answer :<()" << std::endl;
             }
         }
     }
