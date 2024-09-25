@@ -42,13 +42,15 @@ struct ip
     struct in_addr ip_src, ip_dst; /* source and dest address */
 };
 
-struct udphdr
+// UDP header struct
+struct updhdr
 {
     unsigned short source;
     unsigned short dest;
     unsigned short len;
     unsigned short check;
 };
+
 
 /*
 raw challenge: ???M
@@ -68,7 +70,7 @@ uint32_t getSignature()
 
     signed_challenge = htonl(signed_challenge);
 
-    std::cout << "Signature: " << std::hex << signed_challenge << std::endl;
+    std::cout << "Sending signature: " << std::hex << signed_challenge << std::endl;
 
     return signed_challenge;
 }
@@ -78,70 +80,78 @@ void secretPort(int sock, sockaddr_in server_addr, int port)
 {
     unsigned char group_id = GROUP_ID; // Store group ID as a single unsigned byte
 
-    // Send the group ID as a single byte
-    if (sendto(sock, &group_id, sizeof(group_id), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    for (int attempt = 0; attempt < RETRY_COUNT; ++attempt)
     {
-        std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
-        return;
-    }
+        // Send the group ID as a single byte
+        if (sendto(sock, &group_id, sizeof(group_id), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+        {
+            std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
+            return;
+        }
+    
 
-    char buffer[BUFFER_SIZE] = {0};
-    sockaddr_in response_addr;
-    socklen_t addr_len = sizeof(response_addr);
+        char buffer[BUFFER_SIZE] = {0};
+        sockaddr_in response_addr;
+        socklen_t addr_len = sizeof(response_addr);
 
-    int recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
-    std::cerr << recv_len << std::endl;
-    if (recv_len >= 0)
-    {
-
-        buffer[recv_len] = '\0';
-        std::cerr << "raw challenge: " << buffer << std::endl;
-
-        // the challeng is 4-byte
-        if (recv_len == 4)
+        int recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
+        //std::cerr << recv_len << std::endl;
+        if (recv_len >= 0)
         {
 
-            uint32_t challenge_network;
-            std::memcpy(&challenge_network, buffer, sizeof(challenge_network));
+            buffer[recv_len] = '\0';
+            std::cerr << "raw challenge: " << buffer << std::endl;
 
-            // convert from network byte order to host byte order
-            uint32_t challenge_host = ntohl(challenge_network);
+            // the challeng is 4-byte
+            if (recv_len == 4)
+            {
 
-            std::cerr << "Challenge in host byte order: " << challenge_host << std::endl;
+                uint32_t challenge_network;
+                std::memcpy(&challenge_network, buffer, sizeof(challenge_network));
+
+                // convert from network byte order to host byte order
+                uint32_t challenge_host = ntohl(challenge_network);
+
+                std::cerr << "Challenge in host byte order: " << challenge_host << std::endl;
+            }
+            else
+            {
+                std::cerr << "Received data is too small to be a 4-byte challenge" << std::endl;
+            }
         }
         else
         {
-            std::cerr << "Received data is too small to be a 4-byte challenge" << std::endl;
+            std::cerr << "Error receiving response from port " << port << std::endl;
+            continue;
         }
-    }
-    else
-    {
-        std::cerr << "Error receiving response from port " << port << ": " << strerror(errno) << std::endl;
-    }
+    
 
-    // sending signature
-    uint32_t sign = getSignature();
-    uint8_t message[5];
-    message[0] = GROUP_ID;
-    memcpy(&message[1], &sign, sizeof(sign));
+        // sending signature
+        uint32_t sign = getSignature();
+        uint8_t message[5];
+        message[0] = GROUP_ID;
+        memcpy(&message[1], &sign, sizeof(sign));
 
-    if (sendto(sock, message, sizeof(message), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    {
-        std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
-        return;
-    }
+        if (sendto(sock, message, sizeof(message), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+        {
+            std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
+            return;
+        }
 
-    memset(buffer, 0, sizeof(buffer));
+            memset(buffer, 0, sizeof(buffer));
 
-    recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, NULL, NULL);
-    if (recv_len >= 0)
-    {
-        buffer[recv_len] = '\0';
-        std::cerr << "Server response: " << buffer << std::endl;
-    }
-    else
-    {
-        std::cerr << "Failed to receive response: " << strerror(errno) << std::endl;
+            recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, NULL, NULL);
+            if (recv_len >= 0)
+            {
+                buffer[recv_len] = '\0';
+                std::cerr << "Response: " << buffer << std::endl;
+            }
+            else
+            {
+                std::cerr << "Failed to receive response: " << port << std::endl;
+                continue;
+            }
+        break;
     }
 }
 
@@ -175,79 +185,174 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port)
     }
 }
 
-// method for the checksum port
-void sendUDPport(int sock, sockaddr_in server_addr, int port)
+// method to calculate the checksum
+uint16_t udp_checksum(struct updhdr *p_udp_header, size_t len, uint32_t src_addr, uint32_t dest_addr)
 {
-    uint32_t message = getSignature();
-
-    if (sendto(sock, &message, sizeof(message), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    {
-        std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
-        return;
+    const uint16_t *buf = (const uint16_t*)p_udp_header;
+    uint16_t *ip_src = (uint16_t*)&src_addr, *ip_dst = (uint16_t*)&dest_addr;
+    uint32_t sum = 0;
+    
+    // sum up the header, length and payload
+    for (size_t i = 0; i < len / 2; i++) {
+        sum += *buf++;
     }
 
-    char buffer[BUFFER_SIZE] = {0};
-    sockaddr_in response_addr;
-    socklen_t addr_len = sizeof(response_addr);
 
-    int recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
-    if (recv_len >= 0)
-    {
+    // pad odd byte with zero
+    if (len & 1) {
+        sum += *((uint8_t*)buf);
+    }
+    
 
-        buffer[recv_len] = '\0';
-        std::cerr << "response: " << buffer << std::endl;
+    // add pseudo-header fields, source IP split into two 4 bits, destination IP split into two 4 bits, protocol and length
+    sum += ip_src[0] + ip_src[1];
+    sum += ip_dst[0] + ip_dst[1];
+    sum += htons(IPPROTO_UDP);
+    sum += htons(len);
+
+    // fold sum to 16 bits: anything above 16 bits, add to the 16 bits 
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
     }
 
-    // get last 6 bytes, 2 first bytes of last 6 - checksum, 4 bytes - ip
-    uint16_t two_bytes_checksum;
-    uint32_t four_bytes_ip;
-
-    memcpy(&two_bytes_checksum, buffer + recv_len - 6, 2);
-    uint16_t two_bytes = ntohs(two_bytes_checksum); // Convert to network byte order (big-endian)
-
-    memcpy(&four_bytes_ip, buffer + recv_len - 4, 4);
-    uint32_t four_bytes = ntohl(four_bytes_ip);
-
-    std::cerr << "two bytes of checksum: " << two_bytes << std::endl;
-    std::cerr << "four bytes of ip: " << four_bytes << std::endl;
+    // return then one's compliment 
+    return (uint16_t)~sum;
 }
 
-// UDP message where:
-// the payload is a encapsulated,
-// valid UDP IPv4 packet,
-// that has a valid UDP checksum of 0x9345,
-// and with the source address being 34.221.123.205
+// method for the checksum port
+void sendUDPport(int sock, sockaddr_in server_addr, int port, const char* target_ip)
+{
+    uint32_t message = getSignature();
+    uint16_t two_bytes;
+    uint32_t four_bytes;
+    in_addr src_ip;
+    for (int attempt = 0; attempt < RETRY_COUNT; ++attempt)
+    {
+        if (sendto(sock, &message, sizeof(message), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+        {
+            std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
+            return;
+        }else{
+            std::cerr << "Packet sent successfully: " << " bytes to " 
+                    << inet_ntoa(server_addr.sin_addr) << ":" << ntohs(server_addr.sin_port) << std::endl;
+        }
+    
 
-/*
-// function to calculate UDP checksum
-unsigned short calculate_udp_checksum(struct iphdr *iph, struct udphdr *udph, char *payload, int payload_len) {
-    unsigned long sum = 0;
+        char buffer[BUFFER_SIZE] = {0};
+        sockaddr_in response_addr;
+        socklen_t addr_len = sizeof(response_addr);
 
-    // pseudo-header checksum
-    sum += (iph->saddr >> 16) & 0xFFFF;
-    sum += (iph->saddr) & 0xFFFF;
-    sum += (iph->daddr >> 16) & 0xFFFF;
-    sum += (iph->daddr) & 0xFFFF;
-    sum += htons(iph->protocol);
-    sum += htons(udph->len);
+        int recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
+        if (recv_len >= 0)
+        {
+            buffer[recv_len] = '\0';
+            std::cerr << "response: " << buffer << std::endl;
+        }else{
+            continue;
+        }
+        
 
-    // UDP header checksum
-    sum += ntohs(udph->source);
-    sum += ntohs(udph->dest);
-    sum += ntohs(udph->len);
-    sum += ntohs(udph->check);
+        // get last 6 bytes, 2 first bytes of last 6 - checksum, 4 bytes - ip
+        uint32_t four_bytes_ip;
 
-    // payload checksum
-    for (int i = 0; i < payload_len; i += 2) {
-        unsigned short word = (payload[i] << 8) + (i + 1 < payload_len ? payload[i + 1] : 0);
-        sum += word;
+        memcpy(&two_bytes, buffer + recv_len - 6, 2); // checksum
+
+        memcpy(&four_bytes_ip, buffer + recv_len - 4, 4); // IP
+        
+        // convert the IP address to the in_addr structure
+        src_ip.s_addr = four_bytes_ip;
+
+        std::cerr << "Extracted checksum: " << two_bytes << std::endl;
+        std::cerr << "Extracted IP: " << inet_ntoa(src_ip) << std::endl; 
+            
+        break;
     }
 
-    while (sum >> 16)
-        sum = (sum & 0xFFFF) + (sum >> 16);
 
-    return (unsigned short)(~sum);
-}*/
+    char toSend[BUFFER_SIZE] = {0};
+    struct ip *iphdr = (struct ip*)toSend;
+    struct updhdr *udp_hd = (struct updhdr *)(toSend + sizeof(struct ip));
+
+    memset(toSend, 0, BUFFER_SIZE);
+    
+    // set up IP header
+    iphdr->ip_hl = 5;               
+    iphdr->ip_v = 4;  // IPv4
+    iphdr->ip_len = htons(sizeof(struct ip) + sizeof(struct updhdr) + sizeof(uint16_t));
+    iphdr->ip_tos = 0;
+    iphdr->ip_id = htons(54321);
+    iphdr->ip_ttl = 64;
+    iphdr->ip_off = 0; 
+    iphdr->ip_src = src_ip;  // source IP
+    iphdr->ip_dst.s_addr = server_addr.sin_addr.s_addr; // destination IP
+    iphdr->ip_p = IPPROTO_UDP;    
+    iphdr->ip_sum = 0; 
+
+    //std::cerr << "Source ip (from iphdr): " << inet_ntoa(iphdr->ip_src) << std::endl;
+    //std::cerr << "IP Length (ip_len): " << ntohs(iphdr->ip_len) << std::endl;
+
+    socklen_t addr_len = sizeof(server_addr);
+    getsockname(sock, (struct sockaddr *)&server_addr, &addr_len);
+    int assigned_port = ntohs(server_addr.sin_port);
+    //printf("Assigned source port: %d\n", assigned_port);
+
+    // set up UDP header
+    udp_hd->source = htons(assigned_port);  
+    udp_hd->dest = htons(port);     
+    udp_hd->len = htons(sizeof(struct updhdr) + sizeof(uint16_t));
+    udp_hd->check = 0;         
+
+    // modify the payload (add two bytes), we tried for very long to understand what payload to add, however the distance from needed
+    // checksum and our checksum was always different, so we are bruteforcing the payload unfortunately
+    // loop going through all hexadecimals
+    for( int i = 0; i <= 0xffff; i++ ) {
+        // printf( "%04x = %d\n", i, i );
+        uint16_t data = i;
+        memcpy(toSend + sizeof(struct ip) + sizeof(struct updhdr), &data, sizeof(data));
+
+        // UDP checksum
+        uint16_t calculated_checksum = udp_checksum(udp_hd, sizeof(struct updhdr) + sizeof(data), iphdr->ip_src.s_addr, iphdr->ip_dst.s_addr);
+
+        if(calculated_checksum == two_bytes){ // if it's the same as two bytes for checksum from message we take it!
+            std::cerr << "Calculated checksum: " << calculated_checksum << ", added payload: " << data << std::endl;
+            udp_hd->check = calculated_checksum;
+            uint16_t checksum_in_header = ntohs(udp_hd->check);
+            std::cerr << "Checksum in UDP header: " << std::hex << checksum_in_header << std::endl;
+            break;
+        }
+    }
+
+    // needed to set the destination address again, because it got messed up while getting our assigned port
+    memset(&server_addr, 0, sizeof(server_addr)); 
+    server_addr.sin_family = AF_INET; 
+    server_addr.sin_port = htons(port); 
+    inet_pton(AF_INET, target_ip, &server_addr.sin_addr); 
+
+    // sending the packet
+    for (int attempt = 0; attempt < RETRY_COUNT; ++attempt) {
+        ssize_t sent_len = sendto(sock, toSend, ntohs(iphdr->ip_len), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+        if (sent_len < 0) {
+            std::cerr << "Failed to send packet: " << strerror(errno) << std::endl;
+        } else {
+            std::cerr << "Packet sent successfully: " << sent_len << " bytes to " << inet_ntoa(server_addr.sin_addr) << ":" << ntohs(server_addr.sin_port) << std::endl;
+        }
+
+        char buffer[BUFFER_SIZE] = {0};
+        sockaddr_in response_addr;
+        socklen_t addr_len = sizeof(response_addr);
+
+        int recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
+        if (recv_len >= 0) {
+            buffer[recv_len] = '\0';
+            std::cerr << "response: " << buffer << std::endl;
+        } else {
+            std::cerr << "recvfrom failed: " << strerror(errno) << std::endl;
+            continue;  
+        }
+        break;
+    }
+
+} 
 
 int main(int argc, char *argv[])
 {
@@ -271,7 +376,9 @@ int main(int argc, char *argv[])
     open_ports.push_back(port4);
 
     for (int port : open_ports)
-    {
+    {   
+        std::cerr << "\n\n-------------------------------------------------" << std::endl;
+        std::cerr << "Trying to open port: " << port << std::endl;
 
         int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (sock < 0)
@@ -312,8 +419,7 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            std::cerr << "port: " << port << std::endl;
-
+            
             char buffer[BUFFER_SIZE] = {0};
             sockaddr_in response_addr;
             socklen_t addr_len = sizeof(response_addr);
@@ -322,20 +428,20 @@ int main(int argc, char *argv[])
             if (recv_len >= 0)
             {
                 buffer[recv_len] = '\0';
-                std::cerr << "puzzle:  " << buffer << std::endl;
+                std::cerr << "Puzzle:  " << buffer << std::endl;
                 std::string buffer_str(buffer);
 
-                // challenge message
+                // secret port
                 if (buffer_str.find("Greetings from S.E.C.R.E.T") != std::string::npos)
                 {
-                    std::cerr << "secret" << std::endl;
+                    std::cerr << "Solving secret port" << std::endl;
                     secretPort(sock, server_addr, port);
                 }
 
                 // evil bit
                 if (buffer_str.find("The dark side of network programming") != std::string::npos)
                 {
-                    std::cerr << "evil bit" << std::endl;
+                    std::cerr << "Solving evil bit port" << std::endl;
                     sendSignatureEvil(sock, server_addr, port);
                 }
 
@@ -346,14 +452,18 @@ int main(int argc, char *argv[])
                     std::cerr << "expstn" << std::endl;
                 }
 
-                // 4 byte messafe
+                // checksum port
                 if (buffer_str.find("Send me a 4-byte") != std::string::npos)
                 {
-                    std::cerr << "4 byte message" << std::endl;
-                    sendUDPport(sock, server_addr, port);
+                    std::cerr << "Solving checksum port" << std::endl;
+                    sendUDPport(sock, server_addr, port, target_ip);
                 }
 
                 break;
+            }
+            else
+            {
+                std::cerr << "No answer :<()" << std::endl;
             }
         }
     }
