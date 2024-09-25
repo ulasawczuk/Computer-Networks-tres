@@ -234,7 +234,7 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char* 
     iph->ip_tos     = 0;                                // Type of service
     iph->ip_len     = htons(sizeof(struct ip) + sizeof(struct udphdr) + sizeof(message)); // Total length
     iph->ip_id      = htons(54321);                      // Identification
-    iph->ip_off     = htons(0x4000);                                 // Fragment offset field
+    iph->ip_off     = htons(0x4000);                     // Fragment offset field
     iph->ip_ttl     = 64;                                // Time to live
     iph->ip_p       = IPPROTO_UDP;                       // Protocol
 
@@ -289,11 +289,11 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char* 
         printf("Packet Sent: %zd bytes to %s:%d\n", bytes_sent, target_ip, ntohs(udph->dest));
     }
 
-    char response_buffer[BUFFER_SIZE];
+    char response_buffer[8192];
     struct sockaddr_in response_addr;
     socklen_t addr_len = sizeof(response_addr);
 
-    int recv_len = recvfrom(sd, response_buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
+    int recv_len = recvfrom(sd, response_buffer, 8192 - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
     if (recv_len >= 0) {
         response_buffer[recv_len] = '\0';
         std::cerr << "Response: " << response_buffer << std::endl;
