@@ -3,8 +3,8 @@
 #include <cstring>
 #include <cerrno>
 #include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netinet/udp.h>
 #include <unistd.h>
 #include <chrono>
 #include <thread>
@@ -17,12 +17,13 @@
 #define TIMEOUT_SEC 0
 #define TIMEOUT_USEC 50000 // 0.5 seconds in microseconds
 
+
 // IP header from slides
 struct ip
 {
 #if BYTE_ORDER == LITTLE_ENDIAN
-    u_char ip_hl : 4, /* header length */
-        ip_v : 4;     /* version */
+     u_char ip_hl : 4, /* header length */
+         ip_v : 4;     /* version */
 #endif
 #if BYTE_ORDER == BIG_ENDIAN
     u_char ip_v : 4, /* version */
@@ -74,6 +75,41 @@ uint32_t getSignature()
 
     return signed_challenge;
 }
+
+// method to calculate the checksum
+uint16_t udp_checksum(struct updhdr *p_udp_header, size_t len, uint32_t src_addr, uint32_t dest_addr)
+{
+    const uint16_t *buf = (const uint16_t*)p_udp_header;
+    uint16_t *ip_src = (uint16_t*)&src_addr, *ip_dst = (uint16_t*)&dest_addr;
+    uint32_t sum = 0;
+    
+    // sum up the header, length and payload
+    for (size_t i = 0; i < len / 2; i++) {
+        sum += *buf++;
+    }
+
+
+    // pad odd byte with zero
+    if (len & 1) {
+        sum += *((uint8_t*)buf);
+    }
+    
+
+    // add pseudo-header fields, source IP split into two 4 bits, destination IP split into two 4 bits, protocol and length
+    sum += ip_src[0] + ip_src[1];
+    sum += ip_dst[0] + ip_dst[1];
+    sum += htons(IPPROTO_UDP);
+    sum += htons(len);
+
+    // fold sum to 16 bits: anything above 16 bits, add to the 16 bits 
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    // return then one's compliment 
+    return (uint16_t)~sum;
+}
+
 
 // method for the S.E.C.R.E.T port, with message of five steps
 void secretPort(int sock, sockaddr_in server_addr, int port)
@@ -158,65 +194,114 @@ void secretPort(int sock, sockaddr_in server_addr, int port)
 // TODO we need a raw socket!!!!
 // sending a signature to the port with message:
 // "Send me a 4-byte message containing the signature you got from S.E.C.R.E.T in the first 4 bytes (in network byte order)."
-void sendSignatureEvil(int sock, sockaddr_in server_addr, int port)
+void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char* target_ip)
 {
 
     uint32_t message = getSignature();
 
-    uint32_t evil_bit = 1; // Set the 31st bit to 1 (evil bit).
-    message |= evil_bit;
+    // Create a raw socket with UDP protocol
+    int sd = socket(PF_INET, SOCK_RAW, IPPROTO_UDP);
+    if (sd < 0) {
+        perror("socket() error");
+        exit(2);
+    }
+    printf("OK: a raw socket is created.\n");
 
-    if (sendto(sock, &message, sizeof(message), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    {
-        std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
-        return;
+    // Inform the kernel to not fill up the packet structure, we will build our own
+    int one = 1;
+    if (setsockopt(sd, IPPROTO_IP, IP_HDRINCL, &one, sizeof(one)) < 0) {
+        perror("setsockopt() error");
+        exit(2);
+    }
+    printf("OK: socket option IP_HDRINCL is set.\n");
+
+    struct timeval timeout;      
+    timeout.tv_sec = 2;          // Timeout in seconds
+    timeout.tv_usec = 0;         // Timeout in microseconds
+    if (setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        perror("setsockopt SO_RCVTIMEO error");
+        exit(2);
+    }
+    std::cout << "OK: socket receive timeout is set to 2 seconds." << std::endl;
+
+
+    char buffer[8192] = {0};
+    struct ip *iph = (struct ip *)buffer;               // Use struct ip instead of iphdr
+    struct updhdr *udph = (struct updhdr *)(buffer + sizeof(struct ip));
+
+    iph->ip_hl      = 5;                                 // Header length (in 32-bit words)
+    iph->ip_v       = 4;                                 // IP version
+    iph->ip_tos     = 0;                                // Type of service
+    iph->ip_len     = htons(sizeof(struct ip) + sizeof(struct udphdr) + sizeof(message)); // Total length
+    iph->ip_id      = htons(54321);                      // Identification
+    iph->ip_off     = 1;                                 // Fragment offset field
+    iph->ip_ttl     = 64;                                // Time to live
+    iph->ip_p       = IPPROTO_UDP;                       // Protocol
+
+    if (inet_pton(AF_INET, target_ip, &(iph->ip_dst)) != 1) {
+        perror("inet_pton");
+        exit(2);  
     }
 
-    char buffer[BUFFER_SIZE] = {0};
-    sockaddr_in response_addr;
+    // get own IP address from the socket
+    struct sockaddr_in own_addr;
+    socklen_t own_addr_len = sizeof(own_addr);
+    if (getsockname(sock, (struct sockaddr*)&own_addr, &own_addr_len) < 0) {
+        perror("can't get own IP address from socket");
+        exit(1);
+    }
+    
+    //iph->ip_src = own_addr.sin_addr;
+    iph->ip_src.s_addr = inet_addr("130.208.29.66");
+
+    udph->source = own_addr.sin_port;  
+    udph->dest = htons(port);     
+    udph->len = htons(sizeof(struct updhdr) + sizeof(message));
+    udph->check = 0;        
+
+    uint16_t calculated_checksum = udp_checksum(udph, sizeof(struct updhdr) + sizeof(message), iph->ip_src.s_addr, iph->ip_dst.s_addr);
+    udph->check = calculated_checksum;
+
+    memcpy(buffer + sizeof(struct ip) + sizeof(struct udphdr), &message, sizeof(message));
+
+    struct sockaddr_in sin;
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;
+    sin.sin_port = htons(port); 
+    if (inet_pton(AF_INET, target_ip, &sin.sin_addr) <= 0) {
+        perror("inet_pton for sockaddr_in");
+        exit(1);
+    }
+
+    // Print out the buffer sizes for debugging
+    printf("Buffer Size: %d bytes\n", ntohs(iph->ip_len));
+    printf("Source IP: %s\n", inet_ntoa(iph->ip_src));
+    printf("Source Port: %d\n", ntohs(udph->source));
+    printf("Destination IP: %s\n", target_ip);
+    printf("Destination Port: %d\n", port);
+    printf("IP length: %d\n", iph->ip_len);
+
+    ssize_t bytes_sent = sendto(sd, buffer, iph->ip_len, 0, (struct sockaddr *)&sin, sizeof(sin));
+    if (bytes_sent < 0) {
+        perror("sendto");
+        exit(2);
+    } else {
+        printf("Packet Sent: %zd bytes to %s:%d\n", bytes_sent, target_ip, ntohs(udph->dest));
+    }
+
+    char response_buffer[BUFFER_SIZE];
+    struct sockaddr_in response_addr;
     socklen_t addr_len = sizeof(response_addr);
 
-    int recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
-    if (recv_len >= 0)
-    {
-
-        buffer[recv_len] = '\0';
-        std::cerr << "response: " << buffer << std::endl;
-    }
-}
-
-// method to calculate the checksum
-uint16_t udp_checksum(struct updhdr *p_udp_header, size_t len, uint32_t src_addr, uint32_t dest_addr)
-{
-    const uint16_t *buf = (const uint16_t*)p_udp_header;
-    uint16_t *ip_src = (uint16_t*)&src_addr, *ip_dst = (uint16_t*)&dest_addr;
-    uint32_t sum = 0;
-    
-    // sum up the header, length and payload
-    for (size_t i = 0; i < len / 2; i++) {
-        sum += *buf++;
+    int recv_len = recvfrom(sd, response_buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
+    if (recv_len >= 0) {
+        response_buffer[recv_len] = '\0';
+        std::cerr << "Response: " << response_buffer << std::endl;
+    } else {
+        std::cerr << "recvfrom failed: " << strerror(errno) << std::endl;
     }
 
-
-    // pad odd byte with zero
-    if (len & 1) {
-        sum += *((uint8_t*)buf);
-    }
-    
-
-    // add pseudo-header fields, source IP split into two 4 bits, destination IP split into two 4 bits, protocol and length
-    sum += ip_src[0] + ip_src[1];
-    sum += ip_dst[0] + ip_dst[1];
-    sum += htons(IPPROTO_UDP);
-    sum += htons(len);
-
-    // fold sum to 16 bits: anything above 16 bits, add to the 16 bits 
-    while (sum >> 16) {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-
-    // return then one's compliment 
-    return (uint16_t)~sum;
+    close(sd);
 }
 
 // method for the checksum port
@@ -291,13 +376,15 @@ void sendUDPport(int sock, sockaddr_in server_addr, int port, const char* target
     //std::cerr << "Source ip (from iphdr): " << inet_ntoa(iphdr->ip_src) << std::endl;
     //std::cerr << "IP Length (ip_len): " << ntohs(iphdr->ip_len) << std::endl;
 
-    socklen_t addr_len = sizeof(server_addr);
-    getsockname(sock, (struct sockaddr *)&server_addr, &addr_len);
-    int assigned_port = ntohs(server_addr.sin_port);
-    //printf("Assigned source port: %d\n", assigned_port);
+    struct sockaddr_in own_addr;
+    socklen_t own_addr_len = sizeof(own_addr);
+    if (getsockname(sock, (struct sockaddr*)&own_addr, &own_addr_len) < 0) {
+        perror("can't get own IP address from socket");
+        exit(1);
+    }
 
     // set up UDP header
-    udp_hd->source = htons(assigned_port);  
+    udp_hd->source = own_addr.sin_port;  
     udp_hd->dest = htons(port);     
     udp_hd->len = htons(sizeof(struct updhdr) + sizeof(uint16_t));
     udp_hd->check = 0;         
@@ -321,12 +408,6 @@ void sendUDPport(int sock, sockaddr_in server_addr, int port, const char* target
             break;
         }
     }
-
-    // needed to set the destination address again, because it got messed up while getting our assigned port
-    memset(&server_addr, 0, sizeof(server_addr)); 
-    server_addr.sin_family = AF_INET; 
-    server_addr.sin_port = htons(port); 
-    inet_pton(AF_INET, target_ip, &server_addr.sin_addr); 
 
     // sending the packet
     for (int attempt = 0; attempt < RETRY_COUNT; ++attempt) {
@@ -442,7 +523,7 @@ int main(int argc, char *argv[])
                 if (buffer_str.find("The dark side of network programming") != std::string::npos)
                 {
                     std::cerr << "Solving evil bit port" << std::endl;
-                    sendSignatureEvil(sock, server_addr, port);
+                    sendSignatureEvil(sock, server_addr, port, target_ip);
                 }
 
                 // E.X.P.S.T.N
