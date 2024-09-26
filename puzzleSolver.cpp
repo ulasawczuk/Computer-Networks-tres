@@ -142,7 +142,7 @@ uint16_t udp_checksum(struct updhdr *p_udp_header, size_t len, uint32_t src_addr
 }
 
 // method for the secret port
-void secretPort(int sock, sockaddr_in server_addr, int port)
+int secretPort(int sock, sockaddr_in server_addr, int port)
 {
     unsigned char group_id = GROUP_ID; // Store group ID as a single unsigned byte
 
@@ -152,7 +152,7 @@ void secretPort(int sock, sockaddr_in server_addr, int port)
         if (sendto(sock, &group_id, sizeof(group_id), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
         {
             std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
-            return;
+            return -1;;
         }
 
         char buffer[BUFFER_SIZE] = {0};
@@ -199,7 +199,7 @@ void secretPort(int sock, sockaddr_in server_addr, int port)
         if (sendto(sock, message, sizeof(message), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
         {
             std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
-            return;
+            return -1;
         }
 
         memset(buffer, 0, sizeof(buffer));
@@ -216,6 +216,17 @@ void secretPort(int sock, sockaddr_in server_addr, int port)
             std::cerr << "Failed to receive response: " << port << std::endl;
             continue;
         }
+
+        // get the secret port
+        char port_str[5]; 
+        
+        memcpy(port_str, buffer + recv_len - 5, 4);
+        port_str[4] = '\0';  
+
+        int secret_port = atoi(port_str);
+
+        std::cerr << "Secret port: " << secret_port << std::endl;
+        return secret_port;
         break;
     }
 }
@@ -500,6 +511,8 @@ int main(int argc, char *argv[])
     int port2 = std::atoi(argv[3]);
     int port3 = std::atoi(argv[4]);
     int port4 = std::atoi(argv[5]);
+    int secret_port1;
+    int secret_port2;
 
     std::list<int> open_ports;
     open_ports.push_back(port1);
@@ -567,7 +580,7 @@ int main(int argc, char *argv[])
                 if (buffer_str.find("Greetings from S.E.C.R.E.T") != std::string::npos)
                 {
                     std::cerr << "Solving secret port" << std::endl;
-                    secretPort(sock, server_addr, port);
+                    secret_port1 = secretPort(sock, server_addr, port);
                 }
 
                 // evil bit
