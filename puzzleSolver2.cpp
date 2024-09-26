@@ -179,8 +179,9 @@ unsigned short checksum(unsigned short *ptr, int nbytes)
         *((u_char *)&oddbyte) = *(u_char *)ptr;
         sum += oddbyte;
     }
+    Ö
 
-    sum = (sum >> 16) + (sum & 0xffff);
+        sum = (sum >> 16) + (sum & 0xffff);
     sum = sum + (sum >> 16);
     answer = (short)~sum;
 
@@ -220,7 +221,6 @@ int sendSignatureEvilC(int port)
     iph->version = 4;
     iph->tos = 0;
     iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct udphdr) + 4);
-    std::cerr << "tot len of iphdr: " << sizeof(struct iphdr) + sizeof(struct udphdr) << std::endl;
 
     iph->id = htons(18718); // ID of this packet
 
@@ -230,7 +230,7 @@ int sendSignatureEvilC(int port)
     iph->check = 0; // Set to 0 before calculating checksum
     // iph->saddr = inet_pton("130.208.24.80");   // Source IP
     // Convert string IP address to uint32_t
-    const char *src_ip = "130.208.24.80"; // Source IP address in string form
+    const char *src_ip = "10.100.17.200"; // Source IP address in string form
     if (inet_pton(AF_INET, src_ip, &(iph->saddr)) != 1)
     {
         std::cerr << "Invalid IP address: " << src_ip << std::endl;
@@ -253,7 +253,7 @@ int sendSignatureEvilC(int port)
     // iph->check = checksum((unsigned short *)packet, iph->tot_len);
 
     // Now the pseudo-header for checksum
-    psh.source_address = inet_addr("130.208.24.80");
+    psh.source_address = inet_addr("10.100.17.200");
     psh.dest_address = inet_addr("130.208.246.249");
     psh.zeroes = 0;
     psh.protocol = IPPROTO_UDP;
