@@ -43,6 +43,29 @@ struct ip
     struct in_addr ip_src, ip_dst; /* source and dest address */
 };
 
+struct iphdr
+  {
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+    unsigned int ihl:4;
+    unsigned int version:4;
+#elif __BYTE_ORDER == __BIG_ENDIAN
+    unsigned int version:4;
+    unsigned int ihl:4;
+#else
+# error        "Please fix <bits/endian.h>"
+#endif
+    u_int8_t tos;
+    u_int16_t tot_len;
+    u_int16_t id;
+    u_int16_t frag_off;
+    u_int8_t ttl;
+    u_int8_t protocol;
+    u_int16_t check;
+    u_int32_t saddr;
+    u_int32_t daddr;
+    /*The options start here. */
+  };
+
 // UDP header struct
 struct updhdr
 {
@@ -50,6 +73,15 @@ struct updhdr
     unsigned short dest;
     unsigned short len;
     unsigned short check;
+};
+
+struct pseudo_header
+{
+	u_int32_t source_address;
+	u_int32_t dest_address;
+	u_int8_t placeholder;
+	u_int8_t protocol;
+	u_int16_t udp_length;
 };
 
 
@@ -110,6 +142,30 @@ uint16_t udp_checksum(struct updhdr *p_udp_header, size_t len, uint32_t src_addr
     return (uint16_t)~sum;
 }
 
+// checksum calculation for the evil port, two people were doing this assignment so we have two methods
+unsigned short csum(unsigned short *ptr,int nbytes) 
+{
+	register long sum;
+	unsigned short oddbyte;
+	register short answer;
+
+	sum=0;
+	while(nbytes>1) {
+		sum+=*ptr++;
+		nbytes-=2;
+	}
+	if(nbytes==1) {
+		oddbyte=0;
+		*((u_char*)&oddbyte)=*(u_char*)ptr;
+		sum+=oddbyte;
+	}
+
+	sum = (sum>>16)+(sum & 0xffff);
+	sum = sum + (sum>>16);
+	answer=(short)~sum;
+	
+	return(answer);
+}
 
 // method for the S.E.C.R.E.T port, with message of five steps
 void secretPort(int sock, sockaddr_in server_addr, int port)
@@ -216,7 +272,7 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char* 
     printf("OK: socket option IP_HDRINCL is set.\n");
 
     struct timeval timeout;      
-    timeout.tv_sec = 2;          // Timeout in seconds
+    timeout.tv_sec = 5;          // Timeout in seconds
     timeout.tv_usec = 0;         // Timeout in microseconds
     if (setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
         perror("setsockopt SO_RCVTIMEO error");
@@ -225,45 +281,109 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char* 
     std::cout << "OK: socket receive timeout is set to 2 seconds." << std::endl;
 
 
-    char buffer[8192] = {0};
-    struct ip *iph = (struct ip *)buffer;               // Use struct ip instead of iphdr
-    struct updhdr *udph = (struct updhdr *)(buffer + sizeof(struct ip));
+    char buffer[BUFFER_SIZE] = {0};
+    struct iphdr *iph = (struct iphdr *)buffer;               // Use struct ip instead of iphdr
+    struct updhdr *udph = (struct updhdr *)(buffer + sizeof(struct iphdr));
 
-    iph->ip_hl      = 5;                                 // Header length (in 32-bit words)
-    iph->ip_v       = 4;                                 // IP version
-    iph->ip_tos     = 0;                                // Type of service
-    iph->ip_len     = htons(sizeof(struct ip) + sizeof(struct udphdr) + sizeof(message)); // Total length
-    iph->ip_id      = htons(54321);                      // Identification
-    iph->ip_off     = htons(0x4000);                     // Fragment offset field
-    iph->ip_ttl     = 64;                                // Time to live
-    iph->ip_p       = IPPROTO_UDP;                       // Protocol
+    iph->ihl = 5;
+	iph->version = 4;
+	iph->tos = 0;
+	iph->tot_len = sizeof (struct iphdr) + sizeof (struct udphdr) + sizeof(message);
+	iph->id = htonl(54321);	//Id of this packet
+	iph->frag_off = 0x8000;
+	iph->ttl = 255;
+	iph->protocol = IPPROTO_UDP;
+	iph->check = 0;		//Set to 0 before calculating checksum
+    iph->check = csum ((unsigned short *) buffer, iph->tot_len);
 
-    if (inet_pton(AF_INET, target_ip, &(iph->ip_dst)) != 1) {
+    std::cerr << "Size of struct IP: " << sizeof(struct iphdr) << std::endl;
+    std::cerr << "Size of struct udphdr: " << sizeof(struct udphdr) << std::endl;
+    std::cerr << "Size of message: " << sizeof(message) << std::endl;
+
+    if (inet_pton(AF_INET, target_ip, &(iph->daddr)) != 1) {
         perror("inet_pton");
         exit(2);  
     }
 
     // get own IP address from the socket
     struct sockaddr_in own_addr;
+    struct sockaddr_in sin;
     socklen_t own_addr_len = sizeof(own_addr);
     if (getsockname(sock, (struct sockaddr*)&own_addr, &own_addr_len) < 0) {
         perror("can't get own IP address from socket");
         exit(1);
     }
+
+    if ((bind(sd, (struct sockaddr *)&own_addr, sizeof(struct sockaddr_in))) != 0) {
+        printf("could not bind server socket to address\n");
+    }
+
+    if (connect(sd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr_in)) != 0) {
+        printf("error %d", errno);
+        printf("connect returned error\n");
+    }
     
-    //iph->ip_src = own_addr.sin_addr;
-    iph->ip_src.s_addr = inet_addr("130.208.29.66");
+    char myIP[16];
+    iph->saddr = inet_addr(inet_ntop(AF_INET, &own_addr.sin_addr, myIP, sizeof(myIP)));
+    //iph->saddr = inet_addr("130.208.29.66");
 
     udph->source = own_addr.sin_port;  
     udph->dest = htons(port);     
     udph->len = htons(sizeof(struct updhdr) + sizeof(message));
     udph->check = 0;        
 
-    uint16_t calculated_checksum = udp_checksum(udph, sizeof(struct updhdr) + sizeof(message), iph->ip_src.s_addr, iph->ip_dst.s_addr);
-    udph->check = calculated_checksum;
+    char *pseudogram;
+    struct pseudo_header psh;
+
+    // UDP checksum with pseudo header
+    psh.source_address = iph->saddr;
+	psh.dest_address = sin.sin_addr.s_addr;
+	psh.placeholder = 0;
+	psh.protocol = IPPROTO_UDP;
+	psh.udp_length = htons(sizeof(struct udphdr) + sizeof(message));
+
+    int psize = sizeof(struct pseudo_header) + sizeof(struct udphdr) + sizeof(message);
+	pseudogram = (char *)malloc(psize);  // Allocate the required memory
+
+    if (pseudogram == NULL) {
+        perror("malloc failed");
+        exit(2);
+    }
+
+    memcpy(pseudogram , (char*) &psh , sizeof (struct pseudo_header));
+	memcpy(pseudogram + sizeof(struct pseudo_header) , udph , sizeof(struct udphdr) + sizeof(message));
+	
+	udph->check = csum( (unsigned short*) pseudogram , psize);
 
     memcpy(buffer + sizeof(struct ip) + sizeof(struct udphdr), &message, sizeof(message));
 
+    //while (1)
+	{
+		//Send the packet
+		if (sendto (sd, buffer, iph->tot_len ,	0, (struct sockaddr *)&sin, sizeof (sin)) < 0)
+		{
+			perror("sendto failed");
+		}
+		//Data send successfully
+		else
+		{
+			printf ("Packet Send! Length : %d \n" , iph->tot_len);
+		}
+	}
+
+    char response_buffer[BUFFER_SIZE];
+    struct sockaddr_in response_addr;
+    socklen_t addr_len = sizeof(response_addr);
+
+    int recv_len = recvfrom(sd, response_buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
+    if (recv_len >= 0) {
+        response_buffer[recv_len] = '\0';
+        std::cerr << "Response: " << response_buffer << std::endl;
+    } else {
+        std::cerr << "recvfrom failed: " << strerror(errno) << std::endl;
+    }
+	
+    /*
     struct sockaddr_in sin;
     memset(&sin, 0, sizeof(sin));
     sin.sin_family = AF_INET;
@@ -300,6 +420,7 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char* 
     } else {
         std::cerr << "recvfrom failed: " << strerror(errno) << std::endl;
     }
+    */
 
     close(sd);
 }
