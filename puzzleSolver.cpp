@@ -289,11 +289,11 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char* 
         printf("Packet Sent: %zd bytes to %s:%d\n", bytes_sent, target_ip, ntohs(udph->dest));
     }
 
-    char response_buffer[8192];
+    char response_buffer[BUFFER_SIZE];
     struct sockaddr_in response_addr;
     socklen_t addr_len = sizeof(response_addr);
 
-    int recv_len = recvfrom(sd, response_buffer, 8192 - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
+    int recv_len = recvfrom(sock, response_buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
     if (recv_len >= 0) {
         response_buffer[recv_len] = '\0';
         std::cerr << "Response: " << response_buffer << std::endl;
