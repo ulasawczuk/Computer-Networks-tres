@@ -9,6 +9,9 @@
 #include <chrono>
 #include <thread>
 #include <list>
+#include <cassert> 
+#include <sstream>
+#include <iomanip>
 
 #define BUFFER_SIZE 1024
 #define RETRY_COUNT 3
@@ -101,7 +104,7 @@ uint32_t getSignature()
 
     signed_challenge = htonl(signed_challenge);
 
-    std::cout << "Sending signature: " << std::hex << signed_challenge << std::endl;
+    //std::cout << "signature: " << std::hex << signed_challenge << std::endl;
 
     return signed_challenge;
 }
@@ -141,14 +144,36 @@ uint16_t udp_checksum(struct updhdr *p_udp_header, size_t len, uint32_t src_addr
     return (uint16_t)~sum;
 }
 
+char* getKnock(std::string secret_phrase) {
+
+    uint32_t signature = getSignature();
+    //std::stringstream ss;
+    //ss << std::hex << std::setw(8) << std::setfill('0') << signature;  // Format to 8 hex digits
+    //std::string hex_signature = ss.str();
+
+    size_t message_length = 4 + secret_phrase.length();
+    //size_t message_length = hex_signature.length() + secret_phrase.length();
+    char* message = new char[message_length];
+
+    //memcpy(message, hex_signature.c_str(), hex_signature.length());
+    //memcpy(message + hex_signature.length(), secret_phrase.c_str(), secret_phrase.length());
+
+    memcpy(message, &signature, sizeof(signature));
+    memcpy(message + 4, secret_phrase.c_str(), secret_phrase.length());
+
+    //std::cerr << "mess: " << message << std::endl;
+
+    return message;
+}
+
 // method for the secret port
 int secretPort(int sock, sockaddr_in server_addr, int port)
 {
-    unsigned char group_id = GROUP_ID; // Store group ID as a single unsigned byte
+    unsigned char group_id = GROUP_ID; 
 
     for (int attempt = 0; attempt < RETRY_COUNT; ++attempt)
     {
-        // Send the group ID as a single byte
+        // send the group ID as a single byte
         if (sendto(sock, &group_id, sizeof(group_id), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
         {
             std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
@@ -166,7 +191,7 @@ int secretPort(int sock, sockaddr_in server_addr, int port)
         {
 
             buffer[recv_len] = '\0';
-            std::cerr << "raw challenge: " << buffer << std::endl;
+            std::cerr << "Raw challenge: " << buffer << std::endl;
 
             // the challeng is 4-byte
             if (recv_len == 4)
@@ -178,11 +203,11 @@ int secretPort(int sock, sockaddr_in server_addr, int port)
                 // convert from network byte order to host byte order
                 uint32_t challenge_host = ntohl(challenge_network);
 
-                std::cerr << "Challenge in host byte order: " << challenge_host << std::endl;
+                std::cout << "Challenge in host byte order: " << challenge_host << std::endl;
             }
             else
             {
-                std::cerr << "Received data is too small to be a 4-byte challenge" << std::endl;
+                std::cout << "Received data is too small to be a 4-byte challenge" << std::endl;
             }
         }
         else
@@ -197,6 +222,8 @@ int secretPort(int sock, sockaddr_in server_addr, int port)
         message[0] = GROUP_ID;
         memcpy(&message[1], &sign, sizeof(sign));
 
+        std::cout << "Sending signature " << sign << "...." << std::endl;
+
         if (sendto(sock, message, sizeof(message), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
         {
             std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
@@ -210,7 +237,7 @@ int secretPort(int sock, sockaddr_in server_addr, int port)
         if (recv_len >= 0)
         {
             buffer[recv_len] = '\0';
-            std::cerr << "Response: " << buffer << std::endl;
+            std::cout << "Response: " << buffer << std::endl;
         }
         else
         {
@@ -218,7 +245,10 @@ int secretPort(int sock, sockaddr_in server_addr, int port)
             continue;
         }
 
-        // get the secret port
+        // get the secret port from response
+
+        std::cout << "Extracting secret port...." << std::endl;
+
         char port_str[5];
 
         memcpy(port_str, buffer + recv_len - 5, 4);
@@ -233,7 +263,7 @@ int secretPort(int sock, sockaddr_in server_addr, int port)
 }
 
 // method for the evil bit port
-void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char *target_ip)
+int sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char *target_ip)
 {
 
     uint32_t message = getSignature();
@@ -243,7 +273,7 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char *
     if (sd < 0)
     {
         perror("socket() error");
-        exit(2);
+        return -1;
     }
     printf("OK: a raw socket is created.\n");
 
@@ -252,7 +282,7 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char *
     if (setsockopt(sd, IPPROTO_IP, IP_HDRINCL, &one, sizeof(one)) < 0)
     {
         perror("setsockopt() error");
-        exit(2);
+        return -1;
     }
     printf("OK: socket option IP_HDRINCL is set.\n");
 
@@ -263,7 +293,7 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char *
     if (setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0)
     {
         perror("setsockopt SO_RCVTIMEO error");
-        exit(2);
+        return -1;
     }
     std::cout << "OK: socket receive timeout is set to 5 seconds." << std::endl;
 
@@ -293,7 +323,7 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char *
     if (inet_pton(AF_INET, target_ip, &(iph->daddr)) != 1)
     {
         perror("inet_pton");
-        exit(2);
+        return -1;
     }
 
     // get own IP address from the socket
@@ -302,7 +332,7 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char *
     if (getsockname(sock, (struct sockaddr *)&own_addr, &own_addr_len) < 0)
     {
         perror("can't get own IP address from socket");
-        exit(1);
+        return -1;
     }
 
     // assign own ip address as source
@@ -324,6 +354,7 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char *
 
     for (int attempt = 0; attempt < RETRY_COUNT; ++attempt)
     {
+        std::cout << "Sending packet with evil bit...." << std::endl;
         // send the packet
         if (sendto(sd, buffer, iph->tot_len, 0, (struct sockaddr *)&sin, sizeof(sin)) < 0)
         {
@@ -339,9 +370,14 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char *
         socklen_t addr_len = sizeof(response_addr);
 
         int recv_len = recvfrom(sock, response_buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
+        std::string buffer_str(response_buffer);
         if (recv_len >= 0)
         {
             response_buffer[recv_len] = '\0';
+            std::string buffer_str(response_buffer);
+            if(buffer_str.find("is a pathway") != std::string::npos){
+                continue;
+            }
             std::cerr << "Response: " << response_buffer << std::endl;
         }
         else
@@ -349,13 +385,25 @@ void sendSignatureEvil(int sock, sockaddr_in server_addr, int port, const char *
             std::cerr << "recvfrom failed: " << strerror(errno) << std::endl;
             continue;
         }
+
+        // get the secret port
+        std::cout << "Extracting secret port...." << std::endl;
+        char port_str[5]; 
+        
+        memcpy(port_str, response_buffer + recv_len - 4, 4);
+        port_str[4] = '\0';  
+
+        int secret_port = atoi(port_str);
+
+        std::cerr << "Secret port: " << secret_port << std::endl;
+        return secret_port;
         break;
     }
     close(sd);
 }
 
 // method for the checksum port
-void checksumPort(int sock, sockaddr_in server_addr, int port, const char *target_ip)
+std::string checksumPort(int sock, sockaddr_in server_addr, int port, const char *target_ip)
 {
     uint32_t message = getSignature();
     uint16_t two_bytes;
@@ -364,15 +412,15 @@ void checksumPort(int sock, sockaddr_in server_addr, int port, const char *targe
     for (int attempt = 0; attempt < RETRY_COUNT; ++attempt)
     {
         // send the signature
+        std::cout << "Sending signature " << message << "...." << std::endl;
         if (sendto(sock, &message, sizeof(message), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
         {
             std::cerr << "Failed to send packet to port " << port << ": " << strerror(errno) << std::endl;
-            return;
+            return "";
         }
         else
         {
-            std::cerr << "Packet sent successfully: " << " bytes to "
-                      << inet_ntoa(server_addr.sin_addr) << ":" << ntohs(server_addr.sin_port) << std::endl;
+            std::cerr << "Packet sent successfully! " << std::endl;
         }
 
         char buffer[BUFFER_SIZE] = {0};
@@ -467,6 +515,7 @@ void checksumPort(int sock, sockaddr_in server_addr, int port, const char *targe
     // sending the packet
     for (int attempt = 0; attempt < RETRY_COUNT; ++attempt)
     {
+        std::cout << "Sending packet with calculated checksum...." << std::endl;
         ssize_t sent_len = sendto(sock, toSend, ntohs(iphdr->ip_len), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
         if (sent_len < 0)
         {
@@ -493,7 +542,157 @@ void checksumPort(int sock, sockaddr_in server_addr, int port, const char *targe
             continue;
         }
 
+        // find the secret phrase
+
+        std::cout << "Extracting secret phrase...." << std::endl;
+        char *start = strchr(buffer, '"');
+        if (start == nullptr) {
+            std::cerr << "Failed to find the starting quotation mark." << std::endl;
+            return "";
+        }
+        
+        char *end = strchr(start + 1, '"');
+        if (end == nullptr) {
+            std::cerr << "Failed to find the ending quotation mark." << std::endl;
+            return "";
+        }
+        
+        int phrase_length = end - start - 1;
+        std::string secret_phrase(start + 1, phrase_length);
+        std::cerr << "Secret phrase: " << secret_phrase << std::endl;
+
+        return secret_phrase;
         break;
+    }
+}
+
+void expstn(int port, int secret_port1, int secret_port2, int sock, sockaddr_in server_addr, std::string secret_phrase, const char *target_ip){
+
+    char message[BUFFER_SIZE];
+    std::vector<int> secret_ports;
+    snprintf(message, sizeof(message), "%d,%d", secret_port1, secret_port2); // combine secret ports
+    std::cerr << "Sending: " << message << " to port: " << port << std::endl;
+
+    for (int attempt = 0; attempt < RETRY_COUNT; ++attempt){
+
+        server_addr.sin_port = htons(port);
+
+        int sent_bytes = sendto(sock, message, strlen(message), 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
+        if (sent_bytes == -1) {
+            perror("sendto failed");
+            exit(1);
+        } else {
+            std::cout << "Message sent successfully, sent bytes: " << sent_bytes << std::endl;
+        }
+
+        char buffer[BUFFER_SIZE] = {0};
+        sockaddr_in response_addr;
+        socklen_t addr_len = sizeof(response_addr);
+
+        int recv_len = recvfrom(sock, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
+        if (recv_len >= 0)
+        {
+            buffer[recv_len] = '\0';
+            std::cerr << "response: " << buffer << std::endl;
+        }
+        else
+        {
+            std::cerr << "recvfrom failed: " << strerror(errno) << std::endl;
+            continue;
+        }
+
+        // getting the ports in order of knocks
+        // splitting the buffer
+        char separator = ',';
+        int i = 0;
+        std::string s;
+
+        // add a comma at the end of buffer to not miss the last knocks
+        buffer[recv_len] = ',';   
+        buffer[recv_len + 1] = '\0';
+        while (buffer[i] != '\0') {
+            if (buffer[i] != separator) {
+                // Append the char to the temp string.
+                s += buffer[i];
+            } else {
+                //std::cout << s << std::endl;
+                int t = stoi(s, 0, 10);
+                // Check if the port number is expected one
+                assert(t == secret_port1 || t == secret_port2);
+                //std::cout << t << std::endl;
+                secret_ports.push_back(t);
+                s.clear();
+            }
+            i++;
+        }
+        assert(secret_ports.size() == 6);
+        assert(s.empty());
+
+        std::cout << "knock: " << getKnock(secret_phrase) << std::endl;
+  
+        int j = 0;
+        for(int porty : secret_ports){
+            j++;
+
+            std::cout << "knocking on port: " << porty << "..." << std::endl;
+            //std::cout << "j: " << j << std::endl;
+            char* knock = getKnock(secret_phrase);
+
+            int socky = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (socky < 0)
+            {
+                std::cerr << "socket creation failed: " << strerror(errno) << std::endl;
+                return;
+            }
+
+            struct timeval timeout;
+            timeout.tv_sec = TIMEOUT_SEC;
+            timeout.tv_usec = TIMEOUT_USEC;
+            if (setsockopt(socky, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0)
+            {
+                std::cerr << "failed to set socket timeout: " << strerror(errno) << std::endl;
+                close(sock);
+                continue;
+            }
+
+            sockaddr_in server_addr2;
+            memset(&server_addr2, 0, sizeof(server_addr2));
+            server_addr2.sin_family = AF_INET;
+            server_addr2.sin_port = htons(porty);
+            if (inet_pton(AF_INET, target_ip, &server_addr2.sin_addr) <= 0)
+            {
+                std::cerr << "given IP address is weird" << std::endl;
+                close(sock);
+                continue;
+            }
+
+            if (sendto(socky, knock, (4 + secret_phrase.length()), 0, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+            {
+                perror("sendto failed\n");
+            }
+            else
+            {
+               std::cout << j << " knock sent!" << std::endl;
+            }
+            if(j == secret_ports.size()){
+                std::cout << "last port" << std::endl;
+                char buffer[BUFFER_SIZE] = {0};
+                sockaddr_in response_addr;
+                socklen_t addr_len = sizeof(response_addr);
+
+                int recv_len = recvfrom(socky, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&response_addr, &addr_len);
+                if (recv_len >= 0)
+                {
+                    buffer[recv_len] = '\0';
+                    std::cout << "response: " << buffer << std::endl;
+                }
+                else
+                {
+                    std::cerr << "recvfrom failed: " << strerror(errno) << std::endl;
+                }
+            }
+        }
+    break;
     }
 }
 
@@ -513,6 +712,7 @@ int main(int argc, char *argv[])
     int port4 = std::atoi(argv[5]);
     int secret_port1;
     int secret_port2;
+    std::string secret_phrase;
 
     std::list<int> open_ports;
     open_ports.push_back(port1);
@@ -522,8 +722,8 @@ int main(int argc, char *argv[])
 
     for (int port : open_ports)
     {
-        std::cerr << "\n\n-------------------------------------------------" << std::endl;
-        std::cerr << "Trying to open port: " << port << std::endl;
+        std::cout << "\n\n-------------------------------------------------" << std::endl;
+        std::cout << "Trying to open port: " << port << std::endl;
 
         int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (sock < 0)
@@ -572,35 +772,36 @@ int main(int argc, char *argv[])
             if (recv_len >= 0)
             {
                 buffer[recv_len] = '\0';
-                std::cerr << "Puzzle:  " << buffer << std::endl;
+                std::cout << "Puzzle:  " << buffer << std::endl;
                 std::string buffer_str(buffer);
 
                 // secret port
                 if (buffer_str.find("Greetings from S.E.C.R.E.T") != std::string::npos)
                 {
-                    std::cerr << "Solving secret port" << std::endl;
+                    std::cout << "Solving secret port" << std::endl;
                     secret_port1 = secretPort(sock, server_addr, port);
                 }
 
                 // evil bit
                 if (buffer_str.find("The dark side of network programming") != std::string::npos)
                 {
-                    std::cerr << "Solving evil bit port" << std::endl;
-                    sendSignatureEvil(sock, server_addr, port, target_ip);
+                    std::cout << "Solving evil bit port" << std::endl;
+                    secret_port2 = sendSignatureEvil(sock, server_addr, port, target_ip);
                 }
 
                 // E.X.P.S.T.N
 
                 if (buffer_str.find("Greetings! I am E.X.P.S.T.N, ") != std::string::npos)
                 {
-                    std::cerr << "expstn" << std::endl;
+                    std::cout << "expstn" << std::endl;
+                    expstn(port, secret_port1, secret_port2, sock, server_addr, secret_phrase, target_ip);
                 }
 
                 // checksum port
                 if (buffer_str.find("Send me a 4-byte") != std::string::npos)
                 {
-                    std::cerr << "Solving checksum port" << std::endl;
-                    checksumPort(sock, server_addr, port, target_ip);
+                    std::cout << "Solving checksum port" << std::endl;
+                    secret_phrase = checksumPort(sock, server_addr, port, target_ip);
                 }
 
                 break;
