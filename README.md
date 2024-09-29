@@ -4,3 +4,5 @@ First the portScanner.cpp scans for open ports. To use it type and run "./scanne
 "OPEN PORTS: 
 4047 4048 4059 4066 ".
 Next we can use the puzzle solver to solve the ports instructions. Type and run "sudo ./puzzlesolver <IP address> <port1> <port2> <port3> <port4>", where the ports are the open ports returned by the scanner. Sudo is needed for a creation of a raw socket in the code. This will return solved ports separated by "-------------------" line. With each port we show the response from the port (starting with first puzzle) and the message we are sending it. 
+
+If the final response results in error, pleasu run the code again as fetching a response with secret port or secret phrase might have failed.
